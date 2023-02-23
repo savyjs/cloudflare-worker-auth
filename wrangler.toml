@@ -1,0 +1,8 @@
+name = "auth"
+main = "src/index.ts"
+compatibility_date = "2023-02-23"
+usage_model = "bundled"
+env = { }
+
+[triggers]
+crons = [ ]
