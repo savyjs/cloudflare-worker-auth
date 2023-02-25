@@ -6,3 +6,9 @@ env = { }
 
 [triggers]
 crons = [ ]
+
+[[ d1_databases ]]
+binding = "DB" # i.e. available in your Worker on env.DB
+database_name = "services"
+database_id = "7faa4fff-722e-47dc-b277-9f728e6a3dd4"
+

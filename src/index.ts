@@ -1,264 +1,385 @@
-addEventListener("fetch", (event) => {
-  event.respondWith(handleRequest(event.request));
-});
-
-async function handleRequest(request) {
-  const controller = new AuthController();
-  await controller.init();
-
-  // Handle requests and call the appropriate controller methods
+export interface Env {
+    services: D1Database;
 }
-
-class AuthController {
-  constructor() {
-   this.orm = new DurableORM('USERS', 'users.db');
-  }
-
-  async register(data) {
-    try {
-      const errors = this.validate(data);
-      if (Object.keys(errors).length) {
-        throw new ValidationError('Validation failed', errors);
-      }
-      
-      data.password = await hashPassword(data.password);
-      data.active = false;
-      data.created_at = Date.now();
-      
-      const result = await this.orm.insert(data);
-      return { id: result.id };
-    } catch (error) {
-      if (error instanceof ValidationError) {
-        return { errors: error.errors };
-      }
-      console.error(`Error registering user: ${error.message}`);
-      return { error: 'Internal server error' };
-    }
-  }
-
-  async login(username, password) {
-    try {
-      const user = await this.orm.findOne({ email: username }) || await this.orm.findOne({ mobile: username });
-      if (!user) {
-        throw new Error('User not found');
-      }
-      const passwordMatches = await verifyPassword(password, user.password);
-      if (!passwordMatches) {
-        throw new Error('Password incorrect');
-      }
-      if (!user.active) {
-        throw new Error('Account not activated');
-      }
-      const token = generateToken(user);
-      return { token };
-    } catch (error) {
-      console.error(`Error logging in user: ${error.message}`);
-      return { error: error.message };
-    }
-  }
-
-  async editUser(userId, data) {
-    try {
-      const user = await this.orm.findOne({ id: userId });
-      if (!user) {
-        throw new Error('User not found');
-      }
-      const newData = { ...user, ...data };
-      await this.orm.update({ id: userId }, newData);
-      return { message: 'User updated successfully' };
-    } catch (error) {
-      console.error(`Error editing user: ${error.message}`);
-      return { error: error.message };
-    }
-  }
-
-  async activateUser(userId, code) {
-    try {
-      const user = await this.orm.findOne({ id: userId });
-      if (!user) {
-        throw new Error('User not found');
-      }
-      if (user.active) {
-        throw new Error('User already activated');
-      }
-      if (user.activation_code !== code) {
-        throw new Error('Activation code incorrect');
-      }
-      await this.orm.update({ id: userId }, { active: true, activation_code: null });
-      return { message: 'User activated successfully' };
-    } catch (error) {
-      console.error(`Error activating user: ${error.message}`);
-      return { error: error.message };
-    }
-  }
-
-  async getUserInfo(userId) {
-    try {
-      const user = await this.orm.findOne({ id: userId });
-      if (!user) {
-        throw new Error('User not found');
-      }
-      const { password, ...userInfo } = user;
-      return { user: userInfo };
-    } catch (error) {
-      console.error(`Error getting user info: ${error.message}`);
-      return { error: error.message };
-    }
-  }
-
-  validate(data) {
-  const errors = {};
-  const emailRegex = /^\S+@\S+\.\S+$/;
-  const mobileRegex = /^(\+98|0)?9\d{9}$/;
-  const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[a-zA-Z\d]{6,}$/;
-
-  if (!data.mobile || !mobileRegex.test(data.mobile)) {
-    errors.mobile = {
-      en: 'Mobile number is required and should be in a valid format',
-      fa: 'شماره موبایل الزامیست و باید به فرمت معتبر باشد'
-    };
-  }
-  if (!data.password || !passwordRegex.test(data.password)) {
-    errors.password = {
-      en: 'Password should be at least 6 characters long and contain at least one uppercase letter, one lowercase letter, and one number',
-      fa: 'رمز عبور باید حداقل ۶ کاراکتر باشد و شامل حداقل یک حرف بزرگ، یک حرف کوچک و یک عدد باشد'
-    };
-  }
-  if (data.email && !emailRegex.test(data.email)) {
-    errors.email = {
-      en: 'Email should be in a valid format',
-      fa: 'ایمیل باید به فرمت معتبر باشد'
-    };
-  }
-
-  return errors;
-}
-
-
-}
-
-
-
-class DurableORM {
-  constructor(kvNamespace, durableObjectName) {
-    this.db = new Database(kvNamespace, durableObjectName);
-  }
-
-  async where(tableName, conditions) {
-    let query = `SELECT * FROM ${tableName}`;
-    const values = [];
-    if (conditions && Object.keys(conditions).length > 0) {
-      query += ' WHERE';
-      let first = true;
-      for (const field in conditions) {
-        if (first) {
-          first = false;
-        } else {
-          query += ' AND';
+const JWT_SECRET = "IhEjJzMoPp3sUvXy2Aq6t9wBcE5gF8rU"
+export default {
+    async fetch(request: Request, env: Env) {
+        try {
+            return new Response(await handleRequest(request, env));
+        } catch (err) {
+            return new Response(err?.toString() || 'no error!');
         }
-        if (Array.isArray(conditions[field])) {
-          query += ` ${field} IN (${Array(conditions[field].length).fill('?').join(',')})`;
-          values.push(...conditions[field]);
-        } else {
-          query += ` ${field} = ?`;
-          values.push(conditions[field]);
+    }
+};
+
+async function handleRequest(request, env) {
+    const {pathname} = new URL(request.url);
+    const authController = new AuthController(env);
+
+    if (request.method === "POST" && pathname === "/api/register") {
+        return await authController.register(request);
+    }
+
+    if (request.method === "POST" && pathname === "/api/login") {
+        return await authController.login(request);
+    }
+
+    if (request.method === "PUT" && pathname === "/api/user") {
+        return await authController.edit(request);
+    }
+
+    if (request.method === "POST" && pathname === "/api/active") {
+        return await authController.activeCode(request);
+    }
+
+    if (request.method === "POST" && pathname === "/api/activate") {
+        return await authController.activateUser(request);
+    }
+
+    if (request.method === "GET" && pathname === "/api/user") {
+        return await authController.getUserInfo(request);
+    }
+
+    // Return a 404 response for any other request
+    return new Response("Not found", {status: 404});
+}
+
+interface User {
+    id: number;
+    username: string;
+    password: string;
+    email: string;
+    mobile: string;
+    fname: string;
+    lname: string;
+    active: boolean;
+    activation_code: string;
+    created_at: string;
+    updated_at: string;
+}
+interface ValidatorOptions {
+    required?: boolean;
+    pattern?: string | RegExp;
+    minLength?: number;
+    maxLength?: number;
+    min?: number;
+    max?: number;
+    validate?: (value: any) => boolean;
+    message?: string;
+}
+
+export class AuthController {
+
+    private jwt: Jwt;
+
+    constructor(env) {
+        this.orm = env.services;
+        this.jwt = new Jwt(JWT_SECRET);
+    }
+
+    async register(request: Request): Promise<Response> {
+        try {
+            const body = await request.json();
+            const validationErrors = await this.validate(body);
+            if (validationErrors.length > 0) {
+                return jsonResponse({
+                    success: false,
+                    message: 'Validation Error',
+                    errors: validationErrors,
+                }, 400);
+            }
+
+            const existingUser = await this.db.get<User>(`users_${body.username}`);
+            if (existingUser) {
+                return jsonResponse({
+                    success: false,
+                    message: 'Username is already taken',
+                    errors: [],
+                }, 400);
+            }
+
+            const hashedPassword = await bcrypt.hash(body.password, 10);
+            const user: User = {
+                id: Date.now(),
+                username: body.username,
+                password: hashedPassword,
+                email: body.email,
+                mobile: body.mobile,
+                fname: body.fname,
+                lname: body.lname,
+                active: false,
+                activation_code: Math.random().toString(36).slice(2),
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString(),
+            };
+            await this.db.put(`users_${user.username}`, user);
+
+            return jsonResponse({
+                success: true,
+                message: 'User registered successfully',
+                data: user,
+            }, 201);
+        } catch (err) {
+            console.error('Error while registering user: ', err);
+            return jsonResponse({
+                success: false,
+                message: 'Internal Server Error',
+                errors: [],
+            }, 500);
         }
-      }
     }
-    const rows = await this.db.query(query, values);
-    return rows;
-  }
 
-  async insert(tableName, data) {
-    const fields = Object.keys(data).join(',');
-    const placeholders = Array(Object.keys(data).length).fill('?').join(',');
-    const values = Object.values(data);
-    const query = `INSERT INTO ${tableName} (${fields}) VALUES (${placeholders})`;
-    const result = await this.db.query(query, values);
-    return result.lastID;
-  }
-
-  async update(tableName, conditions, data) {
-    let query = `UPDATE ${tableName} SET`;
-    const values = [];
-    const updateFields = Object.keys(data);
-    for (let i = 0; i < updateFields.length; i++) {
-      const field = updateFields[i];
-      query += ` ${field} = ?`;
-      values.push(data[field]);
-      if (i < updateFields.length - 1) {
-        query += ',';
-      }
+    async validate<T>(input: T, validatorOptions?: ValidatorOptions): Promise<string[]> {
+        const errors = await validate(input, validatorOptions);
+        const errorMessages: string[] = [];
+        if (errors.length > 0) {
+            errors.forEach((err) => {
+                Object.values(err.constraints).forEach((msg) => {
+                    errorMessages.push(msg);
+                });
+            });
+        }
+        return errorMessages;
     }
-    query += ' WHERE';
-    let first = true;
-    for (const field in conditions) {
-      if (first) {
-        first = false;
-      } else {
-        query += ' AND';
-      }
-      query += ` ${field} = ?`;
-      values.push(conditions[field]);
+
+    async login(request: Request): Promise<Response> {
+        const body = await request.json();
+        const validationResult = this.validate(body, ['email', 'mobile', 'password']);
+        if (validationResult.errors.length) {
+            return jsonResponse({
+                errors: validationResult.errors
+            });
+        }
+
+        const { email, mobile, password } = validationResult.values;
+
+        const user = await this.orm.findOne(User, {
+            email: email ?? undefined,
+            mobile: mobile ?? undefined
+        });
+
+        if (!user || !await user.comparePassword(password)) {
+            return jsonResponse({
+                errors: [{ message: 'Invalid email or password' }]
+            });
+        }
+
+        const token = JWT.sign({ id: user.id }, JWT_SECRET, { expiresIn: '24h' });
+
+        return jsonResponse({
+            data: { token }
+        });
     }
-    const result = await this.db.query(query, values);
-    return result.changes;
-  }
 
-  async upsert(tableName, conditions, data) {
-    const rows = await this.where(tableName, conditions);
-    if (rows.length > 0) {
-      return this.update(tableName, conditions, data);
-    } else {
-      const insertData = Object.assign({}, conditions, data);
-      return this.insert(tableName, insertData);
+    async edit(request: Request): Promise<Response> {
+        try {
+            const body = await request.json();
+            const { id } = request.params;
+
+            const user = await this.orm.get<User>(User, Number(id));
+
+            if (!user) {
+                return this.jsonResponse(
+                    { message: "User not found" },
+                    StatusCode.NotFound
+                );
+            }
+
+            const updatedUser = Object.assign(user, body);
+            await this.orm.save<User>(User, updatedUser);
+
+            return this.jsonResponse(updatedUser);
+        } catch (e) {
+            return this.jsonResponse(
+                { message: "Failed to edit user", error: e.message },
+                StatusCode.BadRequest
+            );
+        }
     }
-  }
 
-  async find(tableName, id) {
-    const rows = await this.where(tableName, { id });
-    if (rows.length > 0) {
-      return rows[0];
-    } else {
-      return null;
+    async activateUser(userId, code) {
+        try {
+            const user = await this.orm.findOne({id: userId});
+            if (!user) {
+                throw new Error('User not found');
+            }
+            if (user.active) {
+                throw new Error('User already activated');
+            }
+            if (user.activation_code !== code) {
+                throw new Error('Activation code incorrect');
+            }
+            await this.orm.update({id: userId}, {active: true, activation_code: null});
+            return {message: 'User activated successfully'};
+        } catch (error) {
+            console.error(`Error activating user: ${error.message}`);
+            return {error: error.message};
+        }
     }
-  }
 
-  async findOne(tableName, conditions) {
-    const rows = await this.where(tableName, conditions);
-    if (rows.length > 0) {
-      return rows[0];
-    } else {
-      return null;
+    async getUserInfo(userId) {
+        try {
+            const user = await this.orm.findOne({id: userId});
+            if (!user) {
+                throw new Error('User not found');
+            }
+            const {password, ...userInfo} = user;
+            return {user: userInfo};
+        } catch (error) {
+            console.error(`Error getting user info: ${error.message}`);
+            return {error: error.message};
+        }
     }
-  }
 
-  async delete(tableName, conditions) {
-    let query = `DELETE FROM ${tableName} WHERE`;
-    const values = [];
-    let first = true;
-    for (const field in conditions) {
-      if (first) {
-        first = false;
-      } else {
-        query += ' AND';
-      }
-      query += ` ${field} = ?`;
-      values.push(conditions[field]);
+}
+
+
+class ORM {
+    constructor(db) {
+        this.db = db;
     }
-    const result = await this.db.query(query, values);
-    return result.changes;
-  }
+
+    async find(tableName, conditions = {}, fields = [], options = {}) {
+        const {where = "", params = []} = this._getWhereClause(conditions);
+        const {select = "", orderBy = "", limit = ""} = options;
+
+        const selectClause = fields.length > 0 ? fields.join(", ") : "*";
+        const query = `SELECT ${selectClause} FROM ${tableName} ${where} ${select} ${orderBy} ${limit}`;
+        const result = await this.db.prepare(query).bind(params).all();
+        return result;
+    }
+
+    async findOne(tableName, conditions = {}, fields = []) {
+        const {where = "", params = []} = this._getWhereClause(conditions);
+
+        const selectClause = fields.length > 0 ? fields.join(", ") : "*";
+        const query = `SELECT ${selectClause} FROM ${tableName} ${where} LIMIT 1`;
+        const result = await this.db.prepare(query).bind(params).get();
+        return result;
+    }
+
+    async count(tableName, conditions = {}) {
+        const {where = "", params = []} = this._getWhereClause(conditions);
+
+        const query = `SELECT COUNT(*) as count FROM ${tableName} ${where}`;
+        const result = await this.db.prepare(query).bind(params).get();
+        return result.count;
+    }
+
+    async insert(tableName, data = {}) {
+        const {fields, values, placeholders} = this._getInsertClause(data);
+        const query = `INSERT INTO ${tableName} (${fields}) VALUES (${placeholders})`;
+        const result = await this.db.prepare(query).bind(values).run();
+        return result.lastInsertRowid;
+    }
+
+    async update(tableName, conditions = {}, data = {}) {
+        const {fields, params} = this._getUpdateClause(data);
+        const {where, whereParams} = this._getWhereClause(conditions);
+
+        const query = `UPDATE ${tableName} SET ${fields} ${where}`;
+        const result = await this.db.prepare(query).bind([...params, ...whereParams]).run();
+        return result.changes;
+    }
+
+    async upsert(tableName, conditions = {}, data = {}) {
+        const existingRow = await this.findOne(tableName, conditions);
+        if (existingRow) {
+            return await this.update(tableName, conditions, data);
+        } else {
+            const mergedData = {...conditions, ...data};
+            return await this.insert(tableName, mergedData);
+        }
+    }
+
+    async delete(tableName, conditions = {}) {
+        const {where, params} = this._getWhereClause(conditions);
+
+        const query = `DELETE FROM ${tableName} ${where}`;
+        const result = await this.db.prepare(query).bind(params).run();
+        return result.changes;
+    }
+
+    _getInsertClause(data) {
+        const fields = Object.keys(data).join(", ");
+        const values = Object.values(data);
+        const placeholders = values.map(() => "?").join(", ");
+        return {fields, values, placeholders};
+    }
+
+    _getUpdateClause(data) {
+        const fields = Object.keys(data).map((key) => `${key} = ?`).join(", ");
+        const params = Object.values(data);
+        return {fields, params};
+    }
+
+    _getWhereClause(conditions) {
+        const where = Object.keys(conditions)
+            .map((key) => `${key} = ?`)
+            .join(" AND ");
+        const params = Object.values(conditions);
+        return {where: where ? `WHERE ${where}` : "", params};
+    }
+}
 
 
-  async count(filter) {
-    const results = await this.where(filter);
-    return results.length;
-  }
+class JsonResponse {
+    constructor(statusCode, message, data = null) {
+        this.statusCode = statusCode;
+        this.message = message;
+        this.data = data;
+    }
 
-  _buildKey(data) {
-    const keys = Object.keys(data).sort();
-    const values = keys.map((k) => data[k]);
-    return JSON.stringify(keys.concat(values));
-  }
+    toJson() {
+        return JSON.stringify({
+            status: this.statusCode,
+            message: this.message,
+            data: this.data,
+        });
+    }
+
+    toResponse() {
+        return new Response(this.toJson(), {
+            headers: { "Content-Type": "application/json" },
+        });
+    }
+}
+
+class Jwt {
+    constructor(secret) {
+        this.secret = secret;
+    }
+
+    sign(payload) {
+        const jwtHeader = { alg: "HS256", typ: "JWT" };
+        const encodedHeader = btoa(JSON.stringify(jwtHeader)).replace(/=/g, "");
+        const encodedPayload = btoa(JSON.stringify(payload)).replace(/=/g, "");
+
+        const signature = btoa(
+            CryptoJS.HmacSHA256(`${encodedHeader}.${encodedPayload}`, this.secret)
+                .toString(CryptoJS.enc.Base64)
+                .replace(/=/g, "")
+        );
+
+        return `${encodedHeader}.${encodedPayload}.${signature}`;
+    }
+
+    verify(token) {
+        const [encodedHeader, encodedPayload, signature] = token.split(".");
+        const jwtHeader = JSON.parse(atob(encodedHeader + "=="));
+        const payload = JSON.parse(atob(encodedPayload + "=="));
+
+        const expectedSignature = CryptoJS.HmacSHA256(
+            `${encodedHeader}.${encodedPayload}`,
+            this.secret
+        )
+            .toString(CryptoJS.enc.Base64)
+            .replace(/=/g, "");
+
+        if (signature !== expectedSignature) {
+            throw new Error("Invalid token signature");
+        }
+
+        return payload;
+    }
 }
